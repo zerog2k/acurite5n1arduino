@@ -10,16 +10,16 @@
 
 // pulse timings
 // SYNC
-#define SYNC_HI      700
-#define SYNC_LO      550
+#define SYNC_HI      675
+#define SYNC_LO      575
 
 // HIGH == 1
 #define LONG_HI      450
-#define LONG_LO      350
+#define LONG_LO      375
 
 // SHORT == 0
 #define SHORT_HI     250
-#define SHORT_LO     150
+#define SHORT_LO     175
 
 #define RESETTIME    10000
 
@@ -59,6 +59,7 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600); 
   Serial.println(F("Starting Acurite5n1 433 WX Decoder v0.1 ..."));
+  pinMode(PIN, INPUT);
   attachInterrupt(0, My_ISR, CHANGE);
 
 }
@@ -97,10 +98,10 @@ void loop() {
 	if (raincounter > 0) {
 	  // track rainfall difference after first run
 	  rainfall = (curraincounter - raincounter) * 0.01;
-	}
-
-	// capture starting counter
-	raincounter = curraincounter;
+	} else {
+	  // capture starting counter
+	  raincounter = curraincounter; 
+        }
         float winddir = getWindDirection(buf[4]);
         Serial.print("wind direction: ");
         Serial.print(winddir, 1);

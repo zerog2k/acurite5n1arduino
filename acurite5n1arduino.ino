@@ -7,6 +7,7 @@
 
  Jens Jensen, (c)2015
 *****************************************/
+#import <avr/eeprom.h>
 
 // pulse timings
 // SYNC
@@ -24,10 +25,12 @@
 #define RESETTIME    10000
 
 // other settables
+#define LED          13
 #define PIN           2  // data pin from 433 RX module
 #define MAXBITS      65  // max framesize
 
-#define DEBUG         0
+//#define DEBUG         1  // uncomment to enable debugging
+#define DEBUGPIN     A0  // pin for triggering logic analyzer
 #define METRIC_UNITS  0  // select display of metric or imperial units
 
 // sync states
@@ -42,7 +45,11 @@ volatile byte            state = RESET;
 volatile byte            buf[8] = {0,0,0,0,0,0,0,0};  // msg frame buffer
 volatile bool            reading = false;            // have valid reading
 
-unsigned int   raincounter = 0; 
+unsigned int   raincounter = 0;
+unsigned int   EEMEM raincounter_persist;    // persist raincounter in eeprom
+#define  MARKER  0x5AA5
+unsigned int   EEMEM eeprom_marker = MARKER; // indicate if we have written to eeprom or not before
+
 // wind directions:
 // { "NW", "WSW", "WNW", "W", "NNW", "SW", "N", "SSW",
 //   "ENE", "SE", "E", "ESE", "NE", "SSE", "NNE", "S" };
@@ -58,8 +65,14 @@ const float winddirections[] = { 315.0, 247.5, 292.5, 270.0,
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600); 
-  Serial.println(F("Starting Acurite5n1 433 WX Decoder v0.1 ..."));
+  Serial.println(F("Starting Acurite5n1 433 WX Decoder v0.2 ..."));
   pinMode(PIN, INPUT);
+  raincounter = getRaincounterEEPROM();
+  #ifdef DEBUG
+    // setup a pin for triggering logic analyzer for debugging pulse train
+    pinMode(DEBUGPIN, OUTPUT);
+    digitalWrite(DEBUGPIN, HIGH);
+  #endif
   attachInterrupt(0, My_ISR, CHANGE);
 
 }
@@ -70,15 +83,16 @@ void loop() {
     // reading found
     noInterrupts();
     if (acurite_crc(buf, sizeof(buf))) {
-      // passes crc, good message      
-      if (DEBUG) {
+      // passes crc, good message
+      digitalWrite(LED, HIGH);     
+      #ifdef DEBUG
         int i;
         for (i=0; i<8; i++) {
           Serial.print(buf[i],HEX);
           Serial.print(" ");
         }
         Serial.println(F("CRC OK"));
-      }
+      #endif
 
       float windspeedkph = getWindSpeed(buf[3], buf[4]);
       Serial.print("windspeed: ");
@@ -95,6 +109,7 @@ void loop() {
         // wind speed, wind direction, rainfall
 	float rainfall = 0.00;
 	unsigned int curraincounter = getRainfallCounter(buf[5], buf[6]);
+        updateRaincounterEEPROM(curraincounter);
 	if (raincounter > 0) {
 	  // track rainfall difference after first run
 	  rainfall = (curraincounter - raincounter) * 0.01;
@@ -136,6 +151,12 @@ void loop() {
         } else {
           Serial.print("LOW");
         }
+      } else {
+        Serial.print("unknown msgtype: ");
+        for (int i=0; i<8; i++) {
+          Serial.print(buf[i],HEX);
+          Serial.print(" ");
+        }
       }
       // time
       unsigned int timesincestart = millis()/60/1000;
@@ -143,10 +164,13 @@ void loop() {
       Serial.print(timesincestart);     
       Serial.println();
         
-    } else if (DEBUG) {
+    } else {
       // failed CRC
-        Serial.println(F("CRC BAD"));
-      }
+    #ifdef DEBUG
+      Serial.println(F("CRC BAD"));
+    #endif
+    }
+    digitalWrite(LED, LOW);
     reading=false;
     interrupts();
   }
@@ -222,6 +246,36 @@ float convInMm(float in) {
   return in * 25.4;
 }
 
+unsigned int getRaincounterEEPROM() {
+  unsigned int oldraincounter = 0;
+  unsigned int marker = eeprom_read_word(&eeprom_marker);
+  #ifdef DEBUG 
+    Serial.print("marker: ");
+    Serial.print(marker, HEX);
+  #endif
+  if (marker == MARKER) {
+    // we have written before, use old value
+    oldraincounter = eeprom_read_word(&raincounter_persist);
+    #ifdef DEBUG
+      Serial.print(", raincounter_persist raw value: ");
+      Serial.println(raincounter, HEX);
+    #endif 
+  } 
+  return oldraincounter;
+}
+
+void updateRaincounterEEPROM(unsigned int raincounter) {
+  eeprom_update_word(&raincounter_persist, raincounter);
+  eeprom_update_word(&eeprom_marker, MARKER); // indicate first write
+  #ifdef DEBUG
+    Serial.print("updateraincountereeprom: ");
+    Serial.print(eeprom_read_word(&raincounter_persist), HEX);
+    Serial.print(", eeprommarker: ");
+    Serial.print(eeprom_read_word(&eeprom_marker), HEX);
+    Serial.println();
+  #endif
+}
+
 void My_ISR()
 {
   // decode the pulses
@@ -252,6 +306,11 @@ void My_ISR()
         state = SYNCDONE;
         syncpulses = 0;
         pulsecnt=0;
+        
+        #ifdef DEBUG
+          // quick debug to trigger logic analyzer at sync
+          digitalWrite(DEBUGPIN, LOW);
+        #endif
       }
       return; 
       
@@ -260,6 +319,9 @@ void My_ISR()
       syncpulses=0;
       pulsecnt=0;
       state=RESET;
+      #ifdef DEBUG
+        digitalWrite(DEBUGPIN, HIGH); //return trigger
+      #endif
       return; 
     }
   } else {
